@@ -28,7 +28,7 @@ public class BasicLookupdJob implements Runnable {
             String nsqdAddress = components[0];
             int nsqdPort = Integer.parseInt(components[1]);
             try {
-                reader.connectToNsqd(nsqdAddress, nsqdPort);
+                reader.getNsqdConn(nsqdAddress, nsqdPort);
             } catch (NSQException e) {
                 log.error("Error reading response from lookupd", e);
             }

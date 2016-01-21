@@ -12,6 +12,7 @@ import java.util.Arrays;
 
 import ly.bit.nsq.exceptions.NSQException;
 import ly.bit.nsq.util.ConnectionUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,6 +68,30 @@ public class BasicConnection extends Connection {
 		}
 	}
 
+	@Override
+	public Message read() throws NSQException {
+            byte[] response = null;
+            Message msg = null;
+
+            try {
+                response = readResponse();
+            } catch (NSQException e) {
+                // Assume this meant that we couldn't read somehow, should close the connection
+                log.error("read : " + e.getMessage());
+                close();
+            }
+            
+            try {
+                msg = handleResponseByte(response);
+            } catch (NSQException e) {
+                // malformed message or something...
+                throw e;
+            }
+
+        
+	    return msg;
+	}
+	
 	@Override
 	public void readForever() {
 		class ReadThis implements Runnable {

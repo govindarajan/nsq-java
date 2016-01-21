@@ -6,12 +6,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import static java.util.concurrent.TimeUnit.SECONDS;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import ly.bit.nsq.exceptions.NSQException;
 import ly.bit.nsq.lookupd.AbstractLookupd;
 import ly.bit.nsq.lookupd.BasicLookupdJob;
 import ly.bit.nsq.util.ConnectionUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,8 +26,9 @@ public abstract class NSQReader {
 	
 	protected String topic;
 	protected String channel;
-	protected String shortHostname;
-	protected String hostname;
+	protected String shortHostname = null;
+	protected String hostname = null;
+	protected String addr;
 	
 	protected ExecutorService executor;
 	
@@ -38,7 +40,10 @@ public abstract class NSQReader {
     private ScheduledExecutorService lookupdScheduler;
 
 	public static final ConcurrentHashMap<String, NSQReader> readerIndex = new ConcurrentHashMap<String, NSQReader>();
-	
+	public void init(String addr, String topic, String channel) {
+	    this.addr = addr;
+	    init(topic, channel);
+	}
 	public void init(String topic, String channel){
 		this.requeueDelay = 50;
 		this.maxRetries = 2;
@@ -47,17 +52,19 @@ public abstract class NSQReader {
 		this.connections = new ConcurrentHashMap<String, Connection>();
 		this.topic = topic;
 		this.channel = channel;
+		
 		try {
 			this.hostname = InetAddress.getLocalHost().getHostName();
 		} catch (UnknownHostException e) {
 			this.hostname = "unknown.host";
 		}
+		
 		String[] hostParts = this.hostname.split("\\.");
 		this.shortHostname = hostParts[0];
 		
 		this.connClass = BasicConnection.class; // TODO can be passed by caller
 		this.lookupdConnections = new ConcurrentHashMap<String, AbstractLookupd>();
-        this.lookupdScheduler = Executors.newScheduledThreadPool(1);
+         this.lookupdScheduler = Executors.newScheduledThreadPool(1);
 
 		// register action for shutdown
 		Runtime.getRuntime().addShutdownHook(new Thread(){
@@ -67,6 +74,7 @@ public abstract class NSQReader {
 			}
 		});
 		readerIndex.put(this.toString(), this);
+		
 	}
 	
 	public void shutdown(){
@@ -79,26 +87,53 @@ public abstract class NSQReader {
 	}
 	
 	protected abstract Runnable makeRunnableFromMessage(Message msg);
+	
+	public Message readMessage() {
+	    try {
+	        // Read from all the nsqd
+	        Message msg = null;
+	        for(Connection cxn : this.connections.values()){
+	            cxn.send(ConnectionUtils.ready(1));
+	            msg = cxn.read();
+	            if (msg != null) {
+	                return msg;
+	            }
+	        }
+        } catch (NSQException e) {
+            e.printStackTrace();
+        }
+	    return null;
+	}
 		
 	public void addMessageForProcessing(Message msg){
 		this.executor.execute(this.makeRunnableFromMessage(msg));
 	}
 	
-	public void requeueMessage(Message msg, boolean doDelay){
-		if(msg.getAttempts() > this.maxRetries){
-			// TODO log giving up
-			this.finishMessage(msg);
-			return;
-		}else{
-			int newDelay = doDelay ? 0 : this.requeueDelay * msg.getAttempts();
-			try {
-				msg.getConn().send(ConnectionUtils.requeue(msg.getId(), newDelay));
-			} catch (NSQException e) {
-				log.error("Error requeueing message to {}, will close the connection", msg.getConn());
-				msg.getConn().close();
-			}
+	public void requeueMessage(Message msg, int delay){
+		try {
+			msg.getConn().send(ConnectionUtils.requeue(msg.getId(), delay));
+		} catch (NSQException e) {
+			log.error("Error requeueing message to {}, will close the connection", msg.getConn());
+			msg.getConn().close();
 		}
+		
 	}
+	
+	public void requeueMessage(Message msg, boolean doDelay){
+        if(msg.getAttempts() > this.maxRetries){
+            // TODO log giving up
+            this.finishMessage(msg);
+            return;
+        }else{
+            int newDelay = doDelay ? 0 : this.requeueDelay * msg.getAttempts();
+            try {
+                msg.getConn().send(ConnectionUtils.requeue(msg.getId(), newDelay));
+            } catch (NSQException e) {
+                log.error("Error requeueing message to {}, will close the connection", msg.getConn());
+                msg.getConn().close();
+            }
+        }
+    }
 	
 	public void finishMessage(Message msg){
 		try {
@@ -133,6 +168,26 @@ public abstract class NSQReader {
 		conn.readForever();
 	}
 	
+    public Connection getNsqdConn(String address, int port) throws NSQException{
+        Connection conn;
+        try {
+            conn = this.connClass.newInstance();
+        } catch (InstantiationException e) {
+            throw new NSQException("Connection implementation must have a default constructor");
+        } catch (IllegalAccessException e) {
+            throw new NSQException("Connection implementation's default constructor must be visible");
+        }
+        conn.init(address, port, this);
+        String connId = conn.toString();
+        if (this.connections.containsKey(connId)) {
+            return conn;
+        }
+        conn.connect();
+        conn.send(ConnectionUtils.subscribe(this.topic, this.channel, this.shortHostname, this.hostname));
+        this.connections.putIfAbsent(connId, conn);
+        return conn;
+    }
+	
 	
 	// lookupd stuff
 	
@@ -142,7 +197,7 @@ public abstract class NSQReader {
 		if (stored != null){
 			return;
 		}
-        lookupdScheduler.scheduleAtFixedRate(new BasicLookupdJob(addr, this), 30, 30, SECONDS);
+        lookupdScheduler.scheduleAtFixedRate(new BasicLookupdJob(addr, this), 0, 30, SECONDS);
 	}
 
 	public String toString(){

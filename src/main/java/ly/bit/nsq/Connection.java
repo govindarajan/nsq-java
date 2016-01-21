@@ -59,6 +59,7 @@ public abstract class Connection {
 	public abstract void send(String command) throws NSQException;
 	public abstract void connect() throws NSQException;
 	public abstract void readForever() throws NSQException;
+	public abstract Message read() throws NSQException;
 	public abstract void close();
 	
 	public Message decodeMesage(byte[] data) throws NSQException {
@@ -102,6 +103,33 @@ public abstract class Connection {
 			throw new NSQException(e);
 		}
 	}
+	
+	   public Message handleResponseByte(byte[] response) throws NSQException {
+	        DataInputStream ds = new DataInputStream(new ByteArrayInputStream(response));
+	        try {
+	            FrameType ft = FrameType.fromInt(ds.readInt());
+	            switch (ft) {
+	            case FRAMETYPERESPONSE:
+	                // do nothing?
+	                break;
+	            case FRAMETYPEMESSAGE:
+	                byte[] messageBytes = Arrays.copyOfRange(response, 4, response.length); 
+	                Message msg = this.decodeMesage(messageBytes);
+	                return msg;
+	            case FRAMETYPEERROR:
+	                String errMsg = new String(Arrays.copyOfRange(response, 4, response.length));
+	                throw new NSQException(errMsg);
+	            default:
+	                // handle the error...
+	                throw new NSQException("Invalid frame type!");
+	            }
+	        } catch (IOException e) {
+	            // this isn't a *real* IOException, as we are only reading from a byte array.
+	            // if this were to be triggered, it would mean that there was a malformed message
+	            throw new NSQException(e);
+	        }
+             return null;
+	    }
 	
 	public String toString(){
 		return this.host + ":" + this.port;

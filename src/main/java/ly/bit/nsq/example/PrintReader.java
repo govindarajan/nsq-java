@@ -24,7 +24,7 @@ public class PrintReader implements SyncResponseHandler {
 
 	public static void main(String... args){
 		SyncResponseHandler sh = new PrintReader();
-		SyncResponseReader reader = new SyncResponseReader("testTopic", "java#ephemeral", sh);
+		SyncResponseReader reader = new SyncResponseReader("test", "something", sh);
 //		try {
 //			reader.connectToNsqd("bitly.org", 4150);
 //		} catch (NSQException e) {
